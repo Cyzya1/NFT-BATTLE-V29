@@ -1,74 +1,111 @@
 
-name: Build NFT BATTLE V29 APK
+name: NFT BATTLE V29 - Android APK
 
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "NFT_BATTLE_BIG_UPDATE_WIP_V29.zip"
-      - ".github/workflows/build-apk.yml"
+    branches:
+      - main
 
 permissions:
   contents: read
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Extract V29 project
+      - name: Find V29 archive
+        id: archive
         shell: bash
         run: |
           set -euo pipefail
 
           ARCHIVE="NFT_BATTLE_BIG_UPDATE_WIP_V29.zip"
 
-          test -f "$ARCHIVE" || {
-            echo "ERROR: V29 ZIP not found in repository root"
+          if [ ! -f "$ARCHIVE" ]; then
+            echo "::error::V29 ZIP archive not found in repository root"
             ls -la
             exit 1
-          }
+          fi
+
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract Android project
+        shell: bash
+        run: |
+          set -euo pipefail
 
           BASE="$RUNNER_TEMP/nft-battle-v29"
           mkdir -p "$BASE"
-          unzip -q "$ARCHIVE" -d "$BASE"
 
-          PROJECT="$(find "$BASE" -type f -name settings.gradle -o -name settings.gradle.kts | head -n 1 | xargs -r dirname)"
+          unzip -q "${{ steps.archive.outputs.archive }}" -d "$BASE"
 
-          if [[ -z "$PROJECT" ]]; then
-            echo "ERROR: Android Gradle project not found in V29 ZIP"
+          PROJECT="$(find "$BASE" -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -print -quit)"
+
+          if [ -z "$PROJECT" ]; then
+            echo "::error::Gradle settings file not found"
             find "$BASE" -maxdepth 5 -type f
             exit 1
           fi
 
-          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
-          echo "Found project: $PROJECT"
+          PROJECT_DIR="$(dirname "$PROJECT")"
+
+          if [ ! -f "$PROJECT_DIR/gradlew" ]; then
+            echo "::error::gradlew not found in project directory"
+            find "$BASE" -name gradlew
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Build debug APK
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PROJECT"
-
+          cd "$PROJECT_DIR"
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew --version
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Locate APK
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(find "$PROJECT_DIR" -type f \
+            -path "*/build/outputs/apk/debug/*.apk" \
+            -print -quit)"
+
+          if [ -z "$APK" ]; then
+            echo "::error::APK was not generated"
+            find "$PROJECT_DIR" -type d -path "*/build/outputs/*"
+            exit 1
+          fi
+
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "APK found: $APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: NFT-BATTLE-V29-APK
-          path: ${{ env.PROJECT }}/app/build/outputs/apk/debug/*.apk
+          path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
