@@ -14,25 +14,40 @@ permissions:
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android 35 SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "platform-tools"
+
       - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+          cache-provider: basic
 
-      - name: Extract Android project
+      - name: Validate and extract Android project
+        id: project
         shell: bash
         run: |
           set -euo pipefail
@@ -40,49 +55,76 @@ jobs:
           EXTRACT_DIR="$RUNNER_TEMP/nft-battle-v29"
 
           if [[ ! -f "$ARCHIVE" ]]; then
-            echo "::error::NFT_BATTLE_BIG_UPDATE_WIP_V29.zip was not found in repository root"
+            echo "::error::Missing file at repository root: NFT_BATTLE_BIG_UPDATE_WIP_V29.zip"
             exit 1
           fi
 
+          unzip -tq "$ARCHIVE"
           mkdir -p "$EXTRACT_DIR"
           unzip -q "$ARCHIVE" -d "$EXTRACT_DIR"
 
-          PROJECT_DIR="$(find "$EXTRACT_DIR" -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit | xargs -r dirname)"
-          if [[ -z "$PROJECT_DIR" ]]; then
-            echo "::error::Could not find settings.gradle or settings.gradle.kts in the ZIP"
-            find "$EXTRACT_DIR" -maxdepth 4 -type f -print
+          SETTINGS_FILE="$(find "$EXTRACT_DIR" -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -print -quit)"
+          if [[ -z "$SETTINGS_FILE" ]]; then
+            echo "::error::The ZIP does not contain settings.gradle or settings.gradle.kts"
+            find "$EXTRACT_DIR" -maxdepth 5 -type f -print
             exit 1
           fi
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Android project: $PROJECT_DIR"
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          REQUIRED_FILES=(
+            "$PROJECT_DIR/build.gradle"
+            "$PROJECT_DIR/app/build.gradle"
+            "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
+            "$PROJECT_DIR/app/src/main/java/com/suzuya/nftbattle/MainActivity.java"
+            "$PROJECT_DIR/app/src/main/assets/index.html"
+          )
+          for FILE in "${REQUIRED_FILES[@]}"; do
+            if [[ ! -f "$FILE" ]]; then
+              echo "::error::Required project file is missing: $FILE"
+              exit 1
+            fi
+          done
+
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Project directory: $PROJECT_DIR"
 
       - name: Build debug APK
         shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
         run: |
           set -euo pipefail
-          gradle --no-daemon --stacktrace --project-dir "$PROJECT_DIR" assembleDebug
+          gradle --version
+          gradle --no-daemon --stacktrace --warning-mode all \
+            --project-dir "$PROJECT_DIR" \
+            :app:assembleDebug
 
-      - name: Find generated APK
+      - name: Locate APK
         id: apk
         shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
         run: |
           set -euo pipefail
-          APK="$(find "$PROJECT_DIR" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)"
+          APK="$(find "$PROJECT_DIR/app/build/outputs/apk" \
+            -type f -name '*.apk' -print -quit)"
 
           if [[ -z "$APK" || ! -s "$APK" ]]; then
-            echo "::error::APK was not generated"
-            find "$PROJECT_DIR" -type d -path '*/build/outputs/*' -print || true
+            echo "::error::Gradle completed but no APK file was found. Build output follows."
+            find "$PROJECT_DIR/app/build/outputs" -maxdepth 6 -type f -print 2>/dev/null || true
             exit 1
           fi
 
-          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
-          echo "APK found: $APK"
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "APK created: $APK"
+          ls -lh "$APK"
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: NFT-BATTLE-V29-APK
-          path: ${{ env.APK_PATH }}
+          path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
           retention-days: 14
