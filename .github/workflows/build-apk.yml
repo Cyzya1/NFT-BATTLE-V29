@@ -49,15 +49,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ARCHIVE="$GITHUB_WORKSPACE/NFT_BATTLE_BIG_UPDATE_WIP_V29.zip"
+          ARCHIVE="$GITHUB_WORKSPACE/NFT_BATTLE_BIG_UPDATE_WIP_V29(2).zip"
           if [[ ! -f "$ARCHIVE" ]]; then
-            ARCHIVE="$(find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -iname '*.zip' -print -quit)"
-          fi
-          if [[ -z "${ARCHIVE:-}" || ! -f "$ARCHIVE" ]]; then
-            echo "::error::Project ZIP not found. Put NFT_BATTLE_BIG_UPDATE_WIP_V29.zip in the repository root."
+            echo "::error::Required project archive not found: NFT_BATTLE_BIG_UPDATE_WIP_V29(2).zip. Put this exact file in the repository root."
             exit 1
           fi
 
+          echo "Using project archive: $(basename "$ARCHIVE")"
           unzip -tq "$ARCHIVE"
           EXTRACT_DIR="$RUNNER_TEMP/nft-battle-v29"
           mkdir -p "$EXTRACT_DIR"
@@ -121,3 +119,4 @@ jobs:
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
           retention-days: 14
+
