@@ -1,5 +1,5 @@
 
-name: Build NFT BATTLE V29 APK
+name: NFT BATTLE V29 APK
 
 on:
   workflow_dispatch:
@@ -15,7 +15,9 @@ permissions:
 
 jobs:
   build:
+    name: Build NFT BATTLE V29
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -27,55 +29,71 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Install Gradle 8.9
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 https://services.gradle.org/distributions/gradle-8.9-bin.zip -o "$RUNNER_TEMP/gradle.zip"
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
 
-      - name: Extract V29 project
+      - name: Extract NFT BATTLE V29
         shell: bash
         run: |
           set -euo pipefail
 
-          ARCHIVE="NFT_BATTLE_BIG_UPDATE_WIP_V29.zip"
-          BASE="$RUNNER_TEMP/nft-battle-v29"
+          archive="NFT_BATTLE_BIG_UPDATE_WIP_V29.zip"
 
-          if [ ! -f "$ARCHIVE" ]; then
-            echo "::error::V29 ZIP not found"
+          if [[ ! -f "$archive" ]]; then
+            echo "ERROR: V29 archive not found."
+            ls -la
             exit 1
           fi
 
-          mkdir -p "$BASE"
-          unzip -q "$ARCHIVE" -d "$BASE"
+          mkdir -p "$RUNNER_TEMP/nft-battle-v29"
+          unzip -oq "$archive" -d "$RUNNER_TEMP/nft-battle-v29"
 
-          SETTINGS="$(find "$BASE" -type f \
-            \( -name settings.gradle -o -name settings.gradle.kts \) \
-            -print -quit)"
+          settings_file="$(find "$RUNNER_TEMP/nft-battle-v29" -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)"
 
-          if [ -z "$SETTINGS" ]; then
-            echo "::error::Gradle project not found"
+          if [[ -z "$settings_file" ]]; then
+            echo "ERROR: Gradle settings file not found."
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$SETTINGS")"
+          project_dir="$(dirname "$settings_file")"
 
-          if [ ! -f "$PROJECT_DIR/gradlew" ]; then
-            echo "::error::gradlew not found"
+          if [[ ! -f "$project_dir/app/build.gradle" && ! -f "$project_dir/app/build.gradle.kts" ]]; then
+            echo "ERROR: Android app Gradle file not found."
             exit 1
           fi
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "PROJECT_DIR=$project_dir" >> "$GITHUB_ENV"
+          echo "Project selected: $project_dir"
 
       - name: Build debug APK
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PROJECT_DIR"
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          "$RUNNER_TEMP/gradle-8.9/bin/gradle" -p "$PROJECT_DIR" assembleDebug --no-daemon --stacktrace
 
-      - name: Upload APK
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apk_path="$(find "$PROJECT_DIR" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)"
+
+          if [[ -z "$apk_path" || ! -s "$apk_path" ]]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "APK created successfully:"
+          ls -lh "$apk_path"
+
+      - name: Upload NFT BATTLE V29 APK
         uses: actions/upload-artifact@v4
         with:
           name: NFT-BATTLE-V29-APK
-          path: "**/build/outputs/apk/debug/*.apk"
+          path: ${{ runner.temp }}/nft-battle-v29/**/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 7
